@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # /var/run/apache2/apache2.pid
-env_file='/home/monitor_config.env'
+env_file='/home/monitor_apache_config.env'
 
 do_credentials_config_check() {
   if [[ -f "$env_file" ]]; then
@@ -14,6 +14,7 @@ do_apache_check() {
     process_id=`cat "$env_file" | cut -d '|' -f1`
     server_name=`cat "$env_file" | cut -d '|' -f2`
     server_ip=`cat "$env_file" | cut -d '|' -f3`
+    notification_email=`cat "$env_file" | cut -d '|' -f4`
 
     if ! [ -f "$process_id" ]; then
         systemctl start apache2.service
@@ -31,7 +32,7 @@ do_apache_check() {
 
     sleep 10s
     if ! [ -f "$process_id" ]; then
-        mail -s 'Apache is down' admin@joeygallegos.com <<< "Apache is down on $server_name ($server_ip) and cannot be restarted"
+        mail -s 'Apache is down' $notification_email <<< "Apache is down on $server_name ($server_ip) and cannot be restarted"
     fi
 }
 
