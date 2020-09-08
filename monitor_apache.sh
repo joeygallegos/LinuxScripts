@@ -4,7 +4,7 @@
 env_file='/home/monitor_apache_config.env'
 
 do_credentials_config_check() {
-  if [[ -f "$env_file" ]]; then
+  if [[ ! -f "$env_file" ]]; then
     echo 'Config file does not exist - creating one'
     touch "$env_file"
   fi
