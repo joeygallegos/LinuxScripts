@@ -16,17 +16,17 @@ do_apache_check() {
     server_ip=`cat "$env_file" | cut -d '|' -f3`
 
     if ! [ -f "$process_id" ]; then
-        systemctl start httpd.service
+        systemctl start apache2.service
     fi
 
     sleep 10s
     if ! [ -f "$process_id" ]; then
-        systemctl start httpd.service
+        systemctl start apache2.service
     fi
 
     sleep 10s
     if ! [ -f "$process_id" ]; then
-        systemctl start httpd.service
+        systemctl start apache2.service
     fi
 
     sleep 10s
