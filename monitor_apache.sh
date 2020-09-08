@@ -31,7 +31,7 @@ do_apache_check() {
 
     sleep 10s
     if ! [ -f "$process_id" ]; then
-        mail -s 'Apache is down' admin@joeygallegos.com <<< echo "Apache is down on $server_name ($server_ip) and cannot be restarted"
+        mail -s 'Apache is down' admin@joeygallegos.com <<< "Apache is down on $server_name ($server_ip) and cannot be restarted"
     fi
 }
 
