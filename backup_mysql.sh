@@ -3,7 +3,7 @@ env_file='/home/credentials.env'
 global_file_name=''
 
 # config
-notification_email=`cat "$env_file" | cut -d '|' -f3`
+notification_email=`cat "$env_file" | cut -d '|' -f4`
 
 do_credentials_config_check() {
   if [[ -f "$env_file" ]]; then
