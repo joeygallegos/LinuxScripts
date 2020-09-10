@@ -1,5 +1,6 @@
 #!/bin/sh
 env_file='/home/credentials.env'
+global_file_name=''
 
 do_credentials_config_check() {
   if [[ -f "$env_file" ]]; then
@@ -15,18 +16,36 @@ do_sql_backup() {
   # split data from file by delimiter
   sql_user=`cat "$env_file" | cut -d '|' -f1`
   sql_pass=`cat "$env_file" | cut -d '|' -f2`
-  sql_port=`cat "$env_file" | cut -d '|' -f3`
 
   filename="db_backup_$now".gz
   backupfolder="/home/backup"
   fullpathbackupfile="$backupfolder/$filename"
 
-  mysqldump --user=$sql_user --password=$sql_pass --default-character-set=utf8 --port=$sql_port --all-databases | gzip > "$fullpathbackupfile"
+  mysqldump --user=$sql_user --password=$sql_pass --default-character-set=utf8 --all-databases | gzip > "$fullpathbackupfile"
+
+  # change file owner
   chown root "$fullpathbackupfile"
 
-  done_at="$(date +'%H:%M:%S %p')"
-  echo "Database dump successfully completed at $done_at - dir: $fullpathbackupfile"
+  done_time="$(date +'%H:%M:%S %p')"
+  echo "Database dump successfully completed at $done_time - dir: $fullpathbackupfile"
+
+  # set global file name
+  global_file_name=$filename
+}
+
+check_if_backup_exists() {
+  # check if the backup file for today exists
+  # and that the file size is not 0KB
+  # or check mysqldump for errors 
+  # else send email saying failed to backup
+
+  if [ -f -s "$global_file_name" ]; then
+    echo "$global_file_name exists on disk"
+  else
+    mail -s 'Error with DB backup task' $notification_email <<< "DB backup file ($global_file_name) was not created successfully"
+  fi
 }
 
 do_credentials_config_check
 do_sql_backup
+check_if_backup_exists
