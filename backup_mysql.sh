@@ -1,5 +1,6 @@
 #!/bin/sh
 env_file='/home/credentials.env'
+backupfolder="/home/backup"
 global_file_name=''
 
 # config
@@ -21,7 +22,6 @@ do_sql_backup() {
   sql_pass=`cat "$env_file" | cut -d '|' -f2`
 
   filename="db_backup_$now".gz
-  backupfolder="/home/backup"
   fullpathbackupfile="$backupfolder/$filename"
 
   mysqldump --user=$sql_user --password=$sql_pass --default-character-set=utf8 --all-databases | gzip > "$fullpathbackupfile"
@@ -43,7 +43,7 @@ check_if_backup_exists() {
   # or check mysqldump for errors 
   # else send email saying failed to backup
 
-  if [ -s "$global_file_name" ]; then
+  if [ -s "$backupfolder/$global_file_name" ]; then
     echo "$global_file_name exists on disk"
   else
     mail -s 'Error with DB backup task' $notification_email <<< "DB backup file ($global_file_name) was not created successfully"
