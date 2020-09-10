@@ -30,7 +30,7 @@ do_sql_backup() {
   chown root "$fullpathbackupfile"
 
   done_time="$(date +'%H:%M:%S %p')"
-  echo "Database dump successfully completed at $done_time - dir: $fullpathbackupfile"
+  echo "Database dump successfully completed at $done_time - output file: $fullpathbackupfile"
 
   # set global file name
   global_file_name=$filename
@@ -44,8 +44,9 @@ check_if_backup_exists() {
   # else send email saying failed to backup
 
   if [ -s "$backupfolder/$global_file_name" ]; then
-    echo "$global_file_name exists on disk"
+    echo "Backup file $global_file_name exists on disk"
   else
+    echo "File doesn't seem to exist, sending notification for the error"
     mail -s 'Error with DB backup task' $notification_email <<< "DB backup file ($global_file_name) was not created successfully"
   fi
 }
