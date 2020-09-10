@@ -2,6 +2,9 @@
 env_file='/home/credentials.env'
 global_file_name=''
 
+# config
+notification_email=`cat "$env_file" | cut -d '|' -f3`
+
 do_credentials_config_check() {
   if [[ -f "$env_file" ]]; then
     echo 'Config file does not exist - creating one'
@@ -39,7 +42,7 @@ check_if_backup_exists() {
   # or check mysqldump for errors 
   # else send email saying failed to backup
 
-  if [ -f -s "$global_file_name" ]; then
+  if [ -s "$global_file_name" ]; then
     echo "$global_file_name exists on disk"
   else
     mail -s 'Error with DB backup task' $notification_email <<< "DB backup file ($global_file_name) was not created successfully"
