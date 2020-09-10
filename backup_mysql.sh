@@ -37,6 +37,7 @@ do_sql_backup() {
 }
 
 check_if_backup_exists() {
+  echo "Checking if the backup file ($global_file_name) was created successfully"
   # check if the backup file for today exists
   # and that the file size is not 0KB
   # or check mysqldump for errors 
