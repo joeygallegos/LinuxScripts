@@ -1,6 +1,7 @@
 #!/bin/sh
 env_file='/home/credentials.env'
 backupfolder="/home/backup"
+wwwfolder="/var/www"
 global_file_name=''
 
 # config
@@ -36,6 +37,25 @@ do_sql_backup() {
   global_file_name=$filename
 }
 
+do_www_backup() {
+  now="$(date +'%m_%d_%Y_%H_%M')"
+  now_pretty="$(date +'\%H:\%M:\%S \%p')"
+  
+  # check if www directory exists
+  if [ -s "$wwwfolder" ]; then
+    echo "The configured www folder exists on disk"
+    
+    filename="www_backup_$now".gz
+    fullpathbackupfile="$backupfolder/$filename"
+    
+    # tar backup dir
+    tar -zcf $fullpathbackupfile $wwwfolder/
+  else
+    echo "The configured www folder doesn't seem to exist, sending notification for the error"
+    mail -s 'Error during www folder backup' $notification_email <<< "The configured www folder ($wwwfolder) doesn't seem to exist"
+  fi
+}
+
 check_if_backup_exists() {
   echo "Checking if the backup file ($global_file_name) was created successfully"
   # check if the backup file for today exists
@@ -54,3 +74,4 @@ check_if_backup_exists() {
 do_credentials_config_check
 do_sql_backup
 check_if_backup_exists
+do_www_backup
