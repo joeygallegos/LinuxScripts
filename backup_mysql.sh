@@ -49,7 +49,8 @@ do_www_backup() {
     fullpathbackupfile="$backupfolder/$filename"
     
     # tar backup dir
-    tar -zcf $fullpathbackupfile $wwwfolder/
+    # might throw warning about leading slash in member names
+    tar -zcf $fullpathbackupfile "$wwwfolder/"
   else
     echo "The configured www folder doesn't seem to exist, sending notification for the error"
     mail -s 'Error during www folder backup' $notification_email <<< "The configured www folder ($wwwfolder) doesn't seem to exist"
