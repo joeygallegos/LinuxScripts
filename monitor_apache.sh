@@ -10,6 +10,8 @@ do_credentials_config_check() {
   fi
 }
 
+# check the apache pid three times per second
+# if the pid is not found, then try to start apache three times
 do_apache_check() {
     process_id=`cat "$env_file" | cut -d '|' -f1`
     server_name=`cat "$env_file" | cut -d '|' -f2`
