@@ -7,6 +7,21 @@ global_file_name=''
 # config
 notification_email=`cat "$env_file" | cut -d '|' -f4`
 
+load_env() {
+  local envFile="${1?Missing environment file}"
+  local environmentAsArray variableDeclaration
+  mapfile environmentAsArray < <(
+    grep --invert-match '^#' "${envFile}" \
+      | grep --invert-match '^\s*$'
+  ) # Uses grep to remove commented and blank lines
+  for variableDeclaration in "${environmentAsArray[@]}"; do
+    export "${variableDeclaration//[$'\r\n']}" # The substitution removes the line breaks
+  done
+}
+
+# load env file
+load_env .env
+
 do_credentials_config_check() {
   if [[ -f "$env_file" ]]; then
     echo 'Config file does not exist - creating one'
