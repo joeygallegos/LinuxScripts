@@ -25,16 +25,22 @@ do_sql_backup() {
   filename="db_backup_$now".gz
   fullpathbackupfile="$backupfolder/$filename"
 
-  mysqldump --user=$sql_user --password=$sql_pass --default-character-set=utf8 --all-databases | gzip > "$fullpathbackupfile"
+  # try running dump command
+  if result = mysqldump --user=$sql_user --password=$sql_pass --default-character-set=utf8 --all-databases
+  then
+    result | gzip > "$fullpathbackupfile"
 
-  # change file owner
-  chown root "$fullpathbackupfile"
+    # change file owner
+    chown root "$fullpathbackupfile"
 
-  done_time="$(date +'%H:%M:%S %p')"
-  echo "Database dump successfully completed at $done_time - output file: $fullpathbackupfile"
+    done_time="$(date +'%H:%M:%S %p')"
+    echo "Database dump successfully completed at $done_time - output file: $fullpathbackupfile"
 
-  # set global file name
-  global_file_name=$filename
+    # set global file name
+    global_file_name=$filename
+  else
+    mail -s 'Error with mysqldump command' $notification_email <<< "An error occoured while executing mysqldump"
+  fi
 }
 
 do_www_backup() {
