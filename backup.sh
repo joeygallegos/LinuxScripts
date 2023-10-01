@@ -1,90 +1,89 @@
 #!/bin/sh
-env_file='/home/credentials.env'
-backupfolder="/home/backup"
-wwwfolder="/var/www"
-global_file_name=''
 
-# config
-notification_email=`cat "$env_file" | cut -d '|' -f4`
-
-load_env() {
-  local envFile="${1?Missing environment file}"
-  local environmentAsArray variableDeclaration
-  mapfile environmentAsArray < <(
-    grep --invert-match '^#' "${envFile}" \
-      | grep --invert-match '^\s*$'
-  ) # Uses grep to remove commented and blank lines
-  for variableDeclaration in "${environmentAsArray[@]}"; do
-    export "${variableDeclaration//[$'\r\n']}" # The substitution removes the line breaks
-  done
-}
-
-# load env file
-load_env .env
-
-do_credentials_config_check() {
-  if [[ -f "$env_file" ]]; then
-    echo 'Config file does not exist - creating one'
-    touch "$env_file"
+# Function to check if jq is installed
+check_jq() {
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: jq is not installed. Please install jq first."
+    exit 1
   fi
 }
 
+# Call the function to check for jq
+check_jq
+
+config_file='config.json'
+backupfolder="/home/backup"
+global_file_name=''
+
+# Read config values
+load_config() {
+  if [[ -f "$config_file" ]]; then
+    sql_user=$(jq -r '.sql_user' "$config_file")
+    sql_pass=$(jq -r '.sql_pass' "$config_file")
+    sql_port=$(jq -r '.sql_port' "$config_file")
+    notification_email=$(jq -r '.notification_email' "$config_file")
+    www_directories=$(jq -r '.www_directories[]' "$config_file")
+    enable_www_backup=$(jq -r '.enable_www_backup' "$config_file")
+  else
+    echo "Config file does not exist - exiting"
+    exit 1
+  fi
+}
+
+load_config
+
 do_sql_backup() {
   now="$(date +'%m_%d_%Y_%H_%M')"
-  now_pretty="$(date +'\%H:\%M:\%S \%p')"
-
-  # split data from file by delimiter
-  sql_user=`cat "$env_file" | cut -d '|' -f1`
-  sql_pass=`cat "$env_file" | cut -d '|' -f2`
-
-  filename="db_backup_$now".gz
+  filename="db_backup_$now.sql"
+  gzfilename="db_backup_$now.sql.gz"
   fullpathbackupfile="$backupfolder/$filename"
-
+  fullpathgzbackupfile="$backupfolder/$gzfilename"
+  
   # try running dump command
-  if result = mysqldump --user=$sql_user --password=$sql_pass --default-character-set=utf8 --all-databases
-  then
-    result | gzip > "$fullpathbackupfile"
-
+  if mysqldump --user=$sql_user --password=$sql_pass --port=$sql_port --default-character-set=utf8 --all-databases > "$fullpathbackupfile"; then
+    # compress the sql file
+    gzip "$fullpathbackupfile"
+    
     # change file owner
-    chown root "$fullpathbackupfile"
-
+    chown root "$fullpathgzbackupfile"
+    
     done_time="$(date +'%H:%M:%S %p')"
-    echo "Database dump successfully completed at $done_time - output file: $fullpathbackupfile"
-
+    echo "Database dump successfully completed at $done_time - output file: $fullpathgzbackupfile"
+    
     # set global file name
-    global_file_name=$filename
+    global_file_name=$gzfilename
   else
-    mail -s 'Error with mysqldump command' $notification_email <<< "An error occoured while executing mysqldump"
+    mail -s 'Error with mysqldump command' $notification_email <<< "An error occurred while executing mysqldump"
   fi
 }
 
 do_www_backup() {
   now="$(date +'%m_%d_%Y_%H_%M')"
-  now_pretty="$(date +'\%H:\%M:\%S \%p')"
-  
-  # check if www directory exists
-  if [ -s "$wwwfolder" ]; then
-    echo "The configured www folder exists on disk"
-    
-    filename="www_backup_$now".gz
-    fullpathbackupfile="$backupfolder/$filename"
-    
-    # tar backup dir
-    # might throw warning about leading slash in member names
-    tar -zcf $fullpathbackupfile "$wwwfolder/"
-  else
-    echo "The configured www folder doesn't seem to exist, sending notification for the error"
-    mail -s 'Error during www folder backup' $notification_email <<< "The configured www folder ($wwwfolder) doesn't seem to exist"
-  fi
+  filename="www_backup_$now.tar"
+  gzfilename="www_backup_$now.tar.gz"
+  fullpathbackupfile="$backupfolder/$filename"
+  fullpathgzbackupfile="$backupfolder/$gzfilename"
+
+  # check if directories exist and add them to the tar file
+  for dir in $www_directories; do
+    if [ ! -d "$dir" ]; then
+      echo "The directory $dir doesn't seem to exist, sending notification for the error"
+      mail -s 'Error during www folder backup' $notification_email <<< "The directory $dir doesn't seem to exist"
+      return  # exit function if any directory is missing
+    else
+      tar -rf "$fullpathbackupfile" "$dir"
+    fi
+  done
+
+  # compress the tar file
+  gzip "$fullpathbackupfile"
+
+  echo "Directories backed up successfully - output file: $fullpathgzbackupfile"
 }
 
 check_if_backup_exists() {
   echo "Checking if the backup file ($global_file_name) was created successfully"
-  # check if the backup file for today exists
-  # and that the file size is not 0KB
-  # or check mysqldump for errors 
-  # else send email saying failed to backup
-
+  
   if [ -s "$backupfolder/$global_file_name" ]; then
     echo "Backup file $global_file_name exists on disk"
   else
@@ -93,7 +92,10 @@ check_if_backup_exists() {
   fi
 }
 
-do_credentials_config_check
 do_sql_backup
 check_if_backup_exists
-do_www_backup
+
+# Call the WWW backup function if the feature flag is set to true
+if [[ "$enable_www_backup" == "true" ]]; then
+  do_www_backup
+fi
