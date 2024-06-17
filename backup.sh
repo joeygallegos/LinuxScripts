@@ -3,7 +3,7 @@
 # Function to check if jq is installed
 check_jq() {
   if ! command -v jq >/dev/null 2>&1; then
-    echo "Error: jq is not installed. Please install jq first."
+    echo "$(date +'%Y-%m-%d %H:%M:%S') Error: jq is not installed. Please install jq first."
     exit 1
   fi
 }
@@ -11,9 +11,21 @@ check_jq() {
 # Call the function to check for jq
 check_jq
 
-config_file='config.json'
+config_file='./config.json'
 backupfolder="/home/backup"
 global_file_name=''
+
+# Function to send error notifications via Mailgun
+send_mailgun_notification() {
+  subject=$1
+  message=$2
+  curl -s --user "api:$mailgun_api_key" \
+    https://api.mailgun.net/v3/$mailgun_domain/messages \
+    -F from="$mailgun_from" \
+    -F to="$notification_email" \
+    -F subject="$subject" \
+    -F text="$message"
+}
 
 # Read config values
 load_config() {
@@ -22,10 +34,13 @@ load_config() {
     sql_pass=$(jq -r '.sql_pass' "$config_file")
     sql_port=$(jq -r '.sql_port' "$config_file")
     notification_email=$(jq -r '.notification_email' "$config_file")
+    mailgun_api_key=$(jq -r '.mailgun_api_key' "$config_file")
+    mailgun_domain=$(jq -r '.mailgun_domain' "$config_file")
+    mailgun_from=$(jq -r '.mailgun_from' "$config_file")
     www_directories=$(jq -r '.www_directories[]' "$config_file")
     enable_www_backup=$(jq -r '.enable_www_backup' "$config_file")
   else
-    echo "Config file does not exist - exiting"
+    echo "$(date +'%Y-%m-%d %H:%M:%S') Error: Config file does not exist - exiting"
     exit 1
   fi
 }
@@ -33,11 +48,13 @@ load_config() {
 load_config
 
 do_sql_backup() {
-  now="$(date +'%m_%d_%Y_%H_%M')"
+  now="$(date +'%Y_%m_%d_%H_%M')"
   filename="db_backup_$now.sql"
   gzfilename="db_backup_$now.sql.gz"
   fullpathbackupfile="$backupfolder/$filename"
   fullpathgzbackupfile="$backupfolder/$gzfilename"
+  
+  echo "$(date +'%Y-%m-%d %H:%M:%S') Starting SQL backup"
   
   # try running dump command
   if mysqldump --user=$sql_user --password=$sql_pass --port=$sql_port --default-character-set=utf8 --all-databases > "$fullpathbackupfile"; then
@@ -47,28 +64,32 @@ do_sql_backup() {
     # change file owner
     chown root "$fullpathgzbackupfile"
     
-    done_time="$(date +'%H:%M:%S %p')"
-    echo "Database dump successfully completed at $done_time - output file: $fullpathgzbackupfile"
+    echo "$(date +'%Y-%m-%d %H:%M:%S') Database dump successfully completed - output file: $fullpathgzbackupfile"
     
     # set global file name
     global_file_name=$gzfilename
   else
-    mail -s 'Error with mysqldump command' $notification_email <<< "An error occurred while executing mysqldump"
+    error_message="An error occurred while executing mysqldump"
+    echo "$(date +'%Y-%m-%d %H:%M:%S') $error_message"
+    send_mailgun_notification 'Error with mysqldump command' "$error_message"
   fi
 }
 
 do_www_backup() {
-  now="$(date +'%m_%d_%Y_%H_%M')"
+  now="$(date +'%Y_%m_%d_%H_%M')"
   filename="www_backup_$now.tar"
   gzfilename="www_backup_$now.tar.gz"
   fullpathbackupfile="$backupfolder/$filename"
   fullpathgzbackupfile="$backupfolder/$gzfilename"
 
+  echo "$(date +'%Y-%m-%d %H:%M:%S') Starting WWW backup"
+  
   # check if directories exist and add them to the tar file
   for dir in $www_directories; do
     if [ ! -d "$dir" ]; then
-      echo "The directory $dir doesn't seem to exist, sending notification for the error"
-      mail -s 'Error during www folder backup' $notification_email <<< "The directory $dir doesn't seem to exist"
+      error_message="The directory $dir doesn't seem to exist"
+      echo "$(date +'%Y-%m-%d %H:%M:%S') $error_message"
+      send_mailgun_notification 'Error during WWW folder backup' "$error_message"
       return  # exit function if any directory is missing
     else
       tar -rf "$fullpathbackupfile" "$dir"
@@ -78,17 +99,18 @@ do_www_backup() {
   # compress the tar file
   gzip "$fullpathbackupfile"
 
-  echo "Directories backed up successfully - output file: $fullpathgzbackupfile"
+  echo "$(date +'%Y-%m-%d %H:%M:%S') Directories backed up successfully - output file: $fullpathgzbackupfile"
 }
 
 check_if_backup_exists() {
-  echo "Checking if the backup file ($global_file_name) was created successfully"
+  echo "$(date +'%Y-%m-%d %H:%M:%S') Checking if the backup file ($global_file_name) was created successfully"
   
   if [ -s "$backupfolder/$global_file_name" ]; then
-    echo "Backup file $global_file_name exists on disk"
+    echo "$(date +'%Y-%m-%d %H:%M:%S') Backup file $global_file_name exists on disk"
   else
-    echo "File doesn't seem to exist, sending notification for the error"
-    mail -s 'Error with DB backup task' $notification_email <<< "DB backup file ($global_file_name) was not created successfully"
+    error_message="DB backup file ($global_file_name) was not created successfully"
+    echo "$(date +'%Y-%m-%d %H:%M:%S') $error_message"
+    send_mailgun_notification 'Error with DB backup task' "$error_message"
   fi
 }
 
