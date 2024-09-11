@@ -3,7 +3,7 @@
 # Function to check if jq is installed
 check_jq() {
   if ! command -v jq >/dev/null 2>&1; then
-    echo "$(date +'%Y-%m-%d %H:%M:%S') Error: jq is not installed. Please install jq first."
+    echo "$(date +'%Y-%m-%d %H:%M:%S'): Error: jq is not installed. Please install jq first."
     exit 1
   fi
 }
@@ -11,7 +11,7 @@ check_jq() {
 # Call the function to check for jq
 check_jq
 
-config_file='./config.json'
+config_file='config.json'
 backupfolder="/home/backup"
 global_file_name=''
 
@@ -28,6 +28,7 @@ send_mailgun_notification() {
 }
 
 # Read config values
+echo "$(date +'%Y-%m-%d %H:%M:%S'): Attempting to read configuration file"
 load_config() {
   if [[ -f "$config_file" ]]; then
     sql_user=$(jq -r '.sql_user' "$config_file")
@@ -40,7 +41,7 @@ load_config() {
     www_directories=$(jq -r '.www_directories[]' "$config_file")
     enable_www_backup=$(jq -r '.enable_www_backup' "$config_file")
   else
-    echo "$(date +'%Y-%m-%d %H:%M:%S') Error: Config file does not exist - exiting"
+    echo "$(date +'%Y-%m-%d %H:%M:%S'): Error: Config file does not exist or problem reading file - exiting"
     exit 1
   fi
 }
@@ -54,7 +55,7 @@ do_sql_backup() {
   fullpathbackupfile="$backupfolder/$filename"
   fullpathgzbackupfile="$backupfolder/$gzfilename"
   
-  echo "$(date +'%Y-%m-%d %H:%M:%S') Starting SQL backup"
+  echo "$(date +'%Y-%m-%d %H:%M:%S'): Starting SQL backup"
   
   # try running dump command
   if mysqldump --user=$sql_user --password=$sql_pass --port=$sql_port --default-character-set=utf8 --all-databases > "$fullpathbackupfile"; then
@@ -64,13 +65,13 @@ do_sql_backup() {
     # change file owner
     chown root "$fullpathgzbackupfile"
     
-    echo "$(date +'%Y-%m-%d %H:%M:%S') Database dump successfully completed - output file: $fullpathgzbackupfile"
+    echo "$(date +'%Y-%m-%d %H:%M:%S'): Database dump successfully completed - output file: $fullpathgzbackupfile"
     
     # set global file name
     global_file_name=$gzfilename
   else
     error_message="An error occurred while executing mysqldump"
-    echo "$(date +'%Y-%m-%d %H:%M:%S') $error_message"
+    echo "$(date +'%Y-%m-%d %H:%M:%S'): $error_message"
     send_mailgun_notification 'Error with mysqldump command' "$error_message"
   fi
 }
@@ -82,13 +83,13 @@ do_www_backup() {
   fullpathbackupfile="$backupfolder/$filename"
   fullpathgzbackupfile="$backupfolder/$gzfilename"
 
-  echo "$(date +'%Y-%m-%d %H:%M:%S') Starting WWW backup"
+  echo "$(date +'%Y-%m-%d %H:%M:%S'): Starting WWW backup"
   
   # check if directories exist and add them to the tar file
   for dir in $www_directories; do
     if [ ! -d "$dir" ]; then
       error_message="The directory $dir doesn't seem to exist"
-      echo "$(date +'%Y-%m-%d %H:%M:%S') $error_message"
+      echo "$(date +'%Y-%m-%d %H:%M:%S'): $error_message"
       send_mailgun_notification 'Error during WWW folder backup' "$error_message"
       return  # exit function if any directory is missing
     else
@@ -99,17 +100,17 @@ do_www_backup() {
   # compress the tar file
   gzip "$fullpathbackupfile"
 
-  echo "$(date +'%Y-%m-%d %H:%M:%S') Directories backed up successfully - output file: $fullpathgzbackupfile"
+  echo "$(date +'%Y-%m-%d %H:%M:%S'): Directories backed up successfully - output file: $fullpathgzbackupfile"
 }
-
+``
 check_if_backup_exists() {
-  echo "$(date +'%Y-%m-%d %H:%M:%S') Checking if the backup file ($global_file_name) was created successfully"
+  echo "$(date +'%Y-%m-%d %H:%M:%S'): Checking if the backup file ($global_file_name) was created successfully"
   
   if [ -s "$backupfolder/$global_file_name" ]; then
-    echo "$(date +'%Y-%m-%d %H:%M:%S') Backup file $global_file_name exists on disk"
+    echo "$(date +'%Y-%m-%d %H:%M:%S'): Backup file $global_file_name exists on disk"
   else
     error_message="DB backup file ($global_file_name) was not created successfully"
-    echo "$(date +'%Y-%m-%d %H:%M:%S') $error_message"
+    echo "$(date +'%Y-%m-%d %H:%M:%S'): $error_message"
     send_mailgun_notification 'Error with DB backup task' "$error_message"
   fi
 }
