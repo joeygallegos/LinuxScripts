@@ -54,7 +54,6 @@ do_sql_backup() {
   gzfilename="db_backup_$now.sql.gz"
   fullpathbackupfile="$backupfolder/$filename"
   fullpathgzbackupfile="$backupfolder/$gzfilename"
-  
   echo "$(date +'%Y-%m-%d %H:%M:%S'): Starting SQL backup"
   
   # try running dump command
@@ -63,7 +62,13 @@ do_sql_backup() {
     gzip "$fullpathbackupfile"
     
     # change file owner
+    # TODO: Why is this needed? Backup files should belong to backup user, not root
+    # The correct approach is to set the ownership of the backup files to the <backupuser> instead
+    # of root. If your backup script is running as the backupuser, you should set the owner to backupuser, or ensure the appropriate permissions are granted so the backup user has access.
     chown root "$fullpathgzbackupfile"
+
+    # Set the file immutable to prevent modification or deletion
+    chattr +i "$fullpathgzbackupfile"
     
     echo "$(date +'%Y-%m-%d %H:%M:%S'): Database dump successfully completed - output file: $fullpathgzbackupfile"
     
@@ -100,9 +105,12 @@ do_www_backup() {
   # compress the tar file
   gzip "$fullpathbackupfile"
 
+  # Set the file immutable to prevent modification or deletion
+  chattr +i "$fullpathgzbackupfile"
+
   echo "$(date +'%Y-%m-%d %H:%M:%S'): Directories backed up successfully - output file: $fullpathgzbackupfile"
 }
-``
+
 check_if_backup_exists() {
   echo "$(date +'%Y-%m-%d %H:%M:%S'): Checking if the backup file ($global_file_name) was created successfully"
   
