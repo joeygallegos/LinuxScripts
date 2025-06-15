@@ -11,7 +11,7 @@ check_jq() {
 # Call the function to check for jq
 check_jq
 
-config_file='config.json'
+config_file='./config.json'
 backupfolder="/home/backup"
 global_file_name=''
 
@@ -115,7 +115,7 @@ check_if_backup_exists() {
   echo "$(date +'%Y-%m-%d %H:%M:%S'): Checking if the backup file ($global_file_name) was created successfully"
   
   if [ -s "$backupfolder/$global_file_name" ]; then
-    echo "$(date +'%Y-%m-%d %H:%M:%S'): Backup file $global_file_name exists on disk"
+    echo "$(date +'%Y-%m-%d %H:%M:%S'): Backup file $global_file_name now exists on disk"
   else
     error_message="DB backup file ($global_file_name) was not created successfully"
     echo "$(date +'%Y-%m-%d %H:%M:%S'): $error_message"
