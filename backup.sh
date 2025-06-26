@@ -46,7 +46,7 @@ load_config() {
 }
 
 do_sql_backup() {
-  now="$(date +'%Y_%m_%d_%H_%M')"
+  now="$(date +'%Y-%m-%d')"
   filename="db_backup_$now.sql"
   gzfilename="db_backup_$now.sql.gz"
   fullpathbackupfile="$backupfolder/$filename"
@@ -82,7 +82,7 @@ do_sql_backup() {
 }
 
 do_www_backup() {
-  now="$(date +'%Y_%m_%d_%H_%M')"
+  now="$(date +'%Y-%m-%d')"
   filename="www_backup_$now.tar"
   gzfilename="www_backup_$now.tar.gz"
   fullpathbackupfile="$backupfolder/$filename"
