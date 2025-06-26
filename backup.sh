@@ -61,20 +61,20 @@ do_sql_backup() {
   fi
 
   if mysqldump --user="$sql_user" --password="$sql_pass" --port="$sql_port" --default-character-set=utf8 --all-databases > "$fullpathbackupfile"; then
-    log "mysqldump completed successfully, compressing backup..."
+    log "✅mysqldump completed successfully, starting the compression of the backup..."
     gzip "$fullpathbackupfile"
 
     # Change ownership to root or your backup user here if needed
     chown root:root "$fullpathgzbackupfile"
 
     # Set immutable attribute to prevent deletion/modification
-    chattr +i "$fullpathgzbackupfile" || log "Warning: Failed to set immutable attribute on backup file"
+    chattr +i "$fullpathgzbackupfile" || log "⚠️Warning: Failed to set immutable attribute on backup file"
 
-    log "Database dump completed successfully - output file: $fullpathgzbackupfile"
+    log "✅Database dump completed successfully - output file: $fullpathgzbackupfile"
 
     global_file_name="$gzfilename"
   else
-    local error_message="An error occurred while executing mysqldump"
+    local error_message="⚠️An error occurred while executing mysqldump"
     log "$error_message"
     send_mailgun_notification 'Error with mysqldump command' "$error_message"
     exit 1
@@ -118,16 +118,16 @@ do_www_backup() {
 
   chattr +i "$fullpathgzbackupfile" || log "Warning: Failed to set immutable attribute on www backup file"
 
-  log "WWW backup completed successfully - output file: $fullpathgzbackupfile"
+  log "✅WWW backup completed successfully - output file: $fullpathgzbackupfile"
 }
 
 check_if_backup_exists() {
   log "Checking if backup file ($global_file_name) exists and is not empty..."
 
   if [[ -s "$backupfolder/$global_file_name" ]]; then
-    log "Backup file $global_file_name exists and is non-empty."
+    log "✅Backup file $global_file_name DOES EXIST and is non-empty."
   else
-    local error_message="Backup file $global_file_name was not created or is empty!"
+    local error_message="⚠️Backup file $global_file_name was not created or is empty!"
     log "$error_message"
     send_mailgun_notification 'Error with DB backup task' "$error_message"
     exit 1
