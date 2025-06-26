@@ -1,24 +1,23 @@
-#!/bin/sh
+#!/bin/bash
 
-# Function to check if jq is installed
+set -euo pipefail
+IFS=$'\n\t'
+
+# Log function for consistent timestamped messages
+log() {
+  echo "$(date +'%Y-%m-%d %H:%M:%S'): $*"
+}
+
 check_jq() {
   if ! command -v jq >/dev/null 2>&1; then
-    echo "$(date +'%Y-%m-%d %H:%M:%S'): Error: jq is not installed. Please install jq first."
+    log "ERROR: jq is not installed. Please install jq first."
     exit 1
   fi
 }
 
-# Call the function to check for jq
-check_jq
-
-config_file='./config.json'
-backupfolder="/home/backup"
-global_file_name=''
-
-# Function to send error notifications via Mailgun
 send_mailgun_notification() {
-  subject=$1
-  message=$2
+  local subject="$1"
+  local message="$2"
   curl -s --user "api:$mailgun_api_key" \
     https://api.mailgun.net/v3/$mailgun_domain/messages \
     -F from="$mailgun_from" \
@@ -27,9 +26,8 @@ send_mailgun_notification() {
     -F text="$message"
 }
 
-# Read config values
-echo "$(date +'%Y-%m-%d %H:%M:%S'): Attempting to read configuration file"
 load_config() {
+  log "Attempting to read configuration file $config_file"
   if [[ -f "$config_file" ]]; then
     sql_user=$(jq -r '.sql_user' "$config_file")
     sql_pass=$(jq -r '.sql_pass' "$config_file")
@@ -38,15 +36,14 @@ load_config() {
     mailgun_api_key=$(jq -r '.mailgun_api_key' "$config_file")
     mailgun_domain=$(jq -r '.mailgun_domain' "$config_file")
     mailgun_from=$(jq -r '.mailgun_from' "$config_file")
-    www_directories=$(jq -r '.www_directories[]' "$config_file")
+    # Read www_directories as an array
+    mapfile -t www_directories < <(jq -r '.www_directories[]' "$config_file")
     enable_www_backup=$(jq -r '.enable_www_backup' "$config_file")
   else
-    echo "$(date +'%Y-%m-%d %H:%M:%S'): Error: Config file does not exist or problem reading file - exiting"
+    log "ERROR: Config file $config_file does not exist or cannot be read"
     exit 1
   fi
 }
-
-load_config
 
 do_sql_backup() {
   now="$(date +'%Y_%m_%d_%H_%M')"
@@ -54,30 +51,33 @@ do_sql_backup() {
   gzfilename="db_backup_$now.sql.gz"
   fullpathbackupfile="$backupfolder/$filename"
   fullpathgzbackupfile="$backupfolder/$gzfilename"
-  echo "$(date +'%Y-%m-%d %H:%M:%S'): Starting SQL backup"
-  
-  # try running dump command
-  if mysqldump --user=$sql_user --password=$sql_pass --port=$sql_port --default-character-set=utf8 --all-databases > "$fullpathbackupfile"; then
-    # compress the sql file
-    gzip "$fullpathbackupfile"
-    
-    # change file owner
-    # TODO: Why is this needed? Backup files should belong to backup user, not root
-    # The correct approach is to set the ownership of the backup files to the <backupuser> instead
-    # of root. If your backup script is running as the backupuser, you should set the owner to backupuser, or ensure the appropriate permissions are granted so the backup user has access.
-    chown root "$fullpathgzbackupfile"
 
-    # Set the file immutable to prevent modification or deletion
-    chattr +i "$fullpathgzbackupfile"
-    
-    echo "$(date +'%Y-%m-%d %H:%M:%S'): Database dump successfully completed - output file: $fullpathgzbackupfile"
-    
-    # set global file name
-    global_file_name=$gzfilename
+  log "Starting SQL backup..."
+
+  if [[ -f "$fullpathgzbackupfile" ]]; then
+    log "Backup file $fullpathgzbackupfile already exists. Removing old backup before proceeding."
+    chattr -i "$fullpathgzbackupfile" || true
+    rm -f "$fullpathgzbackupfile"
+  fi
+
+  if mysqldump --user="$sql_user" --password="$sql_pass" --port="$sql_port" --default-character-set=utf8 --all-databases > "$fullpathbackupfile"; then
+    log "mysqldump completed successfully, compressing backup..."
+    gzip "$fullpathbackupfile"
+
+    # Change ownership to root or your backup user here if needed
+    chown root:root "$fullpathgzbackupfile"
+
+    # Set immutable attribute to prevent deletion/modification
+    chattr +i "$fullpathgzbackupfile" || log "Warning: Failed to set immutable attribute on backup file"
+
+    log "Database dump completed successfully - output file: $fullpathgzbackupfile"
+
+    global_file_name="$gzfilename"
   else
-    error_message="An error occurred while executing mysqldump"
-    echo "$(date +'%Y-%m-%d %H:%M:%S'): $error_message"
+    local error_message="An error occurred while executing mysqldump"
+    log "$error_message"
     send_mailgun_notification 'Error with mysqldump command' "$error_message"
+    exit 1
   fi
 }
 
@@ -88,45 +88,68 @@ do_www_backup() {
   fullpathbackupfile="$backupfolder/$filename"
   fullpathgzbackupfile="$backupfolder/$gzfilename"
 
-  echo "$(date +'%Y-%m-%d %H:%M:%S'): Starting WWW backup"
-  
-  # check if directories exist and add them to the tar file
-  for dir in $www_directories; do
-    if [ ! -d "$dir" ]; then
-      error_message="The directory $dir doesn't seem to exist"
-      echo "$(date +'%Y-%m-%d %H:%M:%S'): $error_message"
+  log "Starting WWW backup..."
+
+  # Remove old backup if exists
+  if [[ -f "$fullpathgzbackupfile" ]]; then
+    log "WWW backup file $fullpathgzbackupfile already exists. Removing old backup."
+    chattr -i "$fullpathgzbackupfile" || true
+    rm -f "$fullpathgzbackupfile"
+  fi
+
+  # Create empty tar file
+  tar -cf "$fullpathbackupfile" --files-from /dev/null
+
+  # Add each directory to tar
+  for dir in "${www_directories[@]}"; do
+    if [[ ! -d "$dir" ]]; then
+      local error_message="Directory $dir does not exist."
+      log "$error_message"
       send_mailgun_notification 'Error during WWW folder backup' "$error_message"
-      return  # exit function if any directory is missing
+      return 1
     else
+      log "Adding directory $dir to archive"
       tar -rf "$fullpathbackupfile" "$dir"
     fi
   done
 
-  # compress the tar file
+  log "Compressing WWW backup..."
   gzip "$fullpathbackupfile"
 
-  # Set the file immutable to prevent modification or deletion
-  chattr +i "$fullpathgzbackupfile"
+  chattr +i "$fullpathgzbackupfile" || log "Warning: Failed to set immutable attribute on www backup file"
 
-  echo "$(date +'%Y-%m-%d %H:%M:%S'): Directories backed up successfully - output file: $fullpathgzbackupfile"
+  log "WWW backup completed successfully - output file: $fullpathgzbackupfile"
 }
 
 check_if_backup_exists() {
-  echo "$(date +'%Y-%m-%d %H:%M:%S'): Checking if the backup file ($global_file_name) was created successfully"
-  
-  if [ -s "$backupfolder/$global_file_name" ]; then
-    echo "$(date +'%Y-%m-%d %H:%M:%S'): Backup file $global_file_name now exists on disk"
+  log "Checking if backup file ($global_file_name) exists and is not empty..."
+
+  if [[ -s "$backupfolder/$global_file_name" ]]; then
+    log "Backup file $global_file_name exists and is non-empty."
   else
-    error_message="DB backup file ($global_file_name) was not created successfully"
-    echo "$(date +'%Y-%m-%d %H:%M:%S'): $error_message"
+    local error_message="Backup file $global_file_name was not created or is empty!"
+    log "$error_message"
     send_mailgun_notification 'Error with DB backup task' "$error_message"
+    exit 1
   fi
 }
+
+##########################
+# Main script starts here #
+##########################
+
+config_file='./config.json'
+backupfolder="/home/backup"
+global_file_name=''
+
+check_jq
+load_config
 
 do_sql_backup
 check_if_backup_exists
 
-# Call the WWW backup function if the feature flag is set to true
 if [[ "$enable_www_backup" == "true" ]]; then
   do_www_backup
 fi
+
+log "Backup script completed successfully."
