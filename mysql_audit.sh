@@ -312,7 +312,7 @@ quick_findings() {
   bold "10) Quick Findings (heuristics)"
   {
     echo "== Users with wildcard hosts =="
-    MYSQL -N -e "SELECT user, host FROM mysql.user WHERE host LIKE '%\\%%' ESCAPE '\\' ORDER BY user,host;"
+    MYSQL -N -e "SELECT user, host FROM mysql.user WHERE host LIKE '%\\%%' ORDER BY user,host;"
 
     echo
     echo "== Users with GRANT OPTION globally =="
