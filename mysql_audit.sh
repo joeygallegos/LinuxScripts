@@ -152,10 +152,12 @@ ORDER BY user, host;
 audit_wildcards_and_empty_pw() {
   bold "2) Wildcards & empty/weak auth quick check"
   info "Flagging users with '%' hosts, blank usernames, or nullable auth_string."
+
+  # ✅ Fixed query string – works inside bash without syntax error
   local q1="
 SELECT user, host, plugin
 FROM mysql.user
-WHERE host LIKE '%\%%' ESCAPE '\\'
+WHERE host LIKE '%\\%%'
    OR user=''
 ORDER BY user, host;
 "
@@ -180,6 +182,7 @@ ORDER BY user, host;
     sql2file "02b_empty_passwords" "$q2"
   fi
 }
+
 
 audit_global_privs() {
   bold "3) Global privileges"
