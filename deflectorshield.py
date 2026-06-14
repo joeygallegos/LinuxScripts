@@ -3,6 +3,7 @@ import subprocess, requests, time, threading, ipaddress, json, socket, sys, os
 CONFIG_FILE = "deflectorshield_config.json"
 DRY_RUN = "--dry-run" in sys.argv
 FLUSH_ONLY = "--flush" in sys.argv
+DEFAULT_WEB_PORTS = [80, 443]
 
 def run(cmd):
     """Run or print command depending on dry-run mode."""
@@ -124,6 +125,16 @@ def apply_allow_ports(ssh_port,ports):
     for p in ports:
         run(["sudo", "iptables", "-A", "INPUT", "-p", "tcp", "--dport", str(p), "-j", "ACCEPT"])
 
+def get_allowed_ports(cfg):
+    ports = []
+    for p in cfg.get("web_ports", DEFAULT_WEB_PORTS) + cfg.get("allow_ports", []):
+        if p not in ports:
+            ports.append(p)
+    return ports
+
+def apply_allow_icmp():
+    run(["sudo", "iptables", "-A", "INPUT", "-p", "icmp", "--icmp-type", "echo-request", "-j", "ACCEPT"])
+
 def set_default_drop():
     run(["sudo","iptables","-P","INPUT","DROP"])
 
@@ -140,7 +151,9 @@ def main():
     setup_block_chain(cfg["chain_name"])
     apply_whitelist_rules(cfg.get("whitelist_rules",[]))
     apply_block_rules(cfg["chain_name"],bad_ips,cfg.get("whitelist_rules",[]))
-    apply_allow_ports(cfg["ssh_port"],cfg.get("allow_ports",[]))
+    apply_allow_ports(cfg["ssh_port"],get_allowed_ports(cfg))
+    if cfg.get("allow_icmp", True):
+        apply_allow_icmp()
     set_default_drop()
     print("[+] DeflectorShield applied successfully.")
 
