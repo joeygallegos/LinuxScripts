@@ -35,6 +35,7 @@ def reset_iptables():
     print("[*] Flushing iptables and setting default policies to ACCEPT...")
     run(["sudo", "iptables", "-F"])
     run(["sudo", "iptables", "-X"])
+    run(["sudo", "iptables", "-t", "nat", "-F"])
     run(["sudo", "iptables", "-P", "INPUT", "ACCEPT"])
     run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"])
     run(["sudo", "iptables", "-P", "OUTPUT", "ACCEPT"])
@@ -294,6 +295,41 @@ def apply_allow_icmp():
     )
 
 
+def apply_nat_redirects(redirects):
+    print(f"[*] Adding {len(redirects)} NAT redirect rules...")
+    for redirect in redirects:
+        dest_ip = redirect["destination_ip"]
+        to_ip = redirect["to_ip"]
+        port = str(redirect["port"])
+        to_port = str(redirect.get("to_port", port))
+        if not is_valid_network(dest_ip) or "/" in dest_ip:
+            print(f"[SKIP] Invalid NAT destination IP: {dest_ip}")
+            continue
+        if not is_valid_network(to_ip) or "/" in to_ip:
+            print(f"[SKIP] Invalid NAT target IP: {to_ip}")
+            continue
+        run(
+            [
+                "sudo",
+                "iptables",
+                "-t",
+                "nat",
+                "-A",
+                "OUTPUT",
+                "-p",
+                "tcp",
+                "-d",
+                dest_ip,
+                "--dport",
+                port,
+                "-j",
+                "DNAT",
+                "--to-destination",
+                f"{to_ip}:{to_port}",
+            ]
+        )
+
+
 def set_default_drop():
     run(["sudo", "iptables", "-P", "INPUT", "DROP"])
 
@@ -319,6 +355,7 @@ def main():
     apply_allow_ports(cfg["ssh_port"], get_allowed_ports(cfg))
     if cfg.get("allow_icmp", True):
         apply_allow_icmp()
+    apply_nat_redirects(cfg.get("nat_redirects", []))
     set_default_drop()
     print("[+] DeflectorShield applied successfully.")
 
