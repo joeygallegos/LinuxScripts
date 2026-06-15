@@ -15,6 +15,16 @@ def run(cmd):
         subprocess.run(cmd, check=False)
 
 
+def run_with_input(cmd, input_text):
+    """Run a command with stdin, or summarize it in dry-run mode."""
+    if DRY_RUN:
+        line_count = len(input_text.splitlines())
+        print(f"[DRY-RUN] {' '.join(cmd)} < {line_count} generated lines")
+    else:
+        print(f"[CMD] {' '.join(cmd)} < generated rules")
+        subprocess.run(cmd, input=input_text, text=True, check=False)
+
+
 def load_config():
     with open(CONFIG_FILE) as f:
         return json.load(f)
@@ -131,6 +141,7 @@ def fetch_url(url, results, idx):
 
 
 def fetch_bad_ips(urls):
+    urls = [u for u in urls if u]
     print("[*] Fetching blocklists concurrently...")
     results = [None] * len(urls)
     threads = []
@@ -172,32 +183,27 @@ def setup_block_chain(chain):
     run(["sudo", "iptables", "-A", "INPUT", "-j", chain])
 
 
-def apply_block_rules(chain, bad_ips, whitelist):
+def apply_block_rules(chain, bad_ips, whitelist, log_blocked_ips=False):
     whitelist_addresses = {w["address"] for w in whitelist}
-    print(f"[*] Adding block rules for {len(bad_ips)} IPs/subnets...")
+    print(f"[*] Preparing block rules for {len(bad_ips)} IPs/subnets...")
+    rules = ["*filter"]
+    skipped = 0
     for ip in bad_ips:
         if not is_valid_network(ip):
             print(f"[SKIP] Invalid: {ip}")
+            skipped += 1
             continue
         # skip if explicitly whitelisted (by address only)
         if ip in whitelist_addresses:
             print(f"[SKIP] Whitelisted: {ip}")
+            skipped += 1
             continue
-        run(
-            [
-                "sudo",
-                "iptables",
-                "-A",
-                chain,
-                "-s",
-                ip,
-                "-j",
-                "LOG",
-                "--log-prefix",
-                "[IPBLOCK] ",
-            ]
-        )
-        run(["sudo", "iptables", "-A", chain, "-s", ip, "-j", "DROP"])
+        if log_blocked_ips:
+            rules.append(f'-A {chain} -s {ip} -j LOG --log-prefix "[IPBLOCK] "')
+        rules.append(f"-A {chain} -s {ip} -j DROP")
+    rules.append("COMMIT")
+    print(f"[*] Loading {len(rules) - 2} block rules in one batch ({skipped} skipped)...")
+    run_with_input(["sudo", "iptables-restore", "-n"], "\n".join(rules) + "\n")
 
 
 def apply_whitelist_rules(whitelist):
@@ -302,9 +308,14 @@ def main():
     reset_iptables()
     allow_fetch_dependencies()
     bad_ips = fetch_bad_ips(cfg["blocklist_feeds"])
-    setup_block_chain(cfg["chain_name"])
     apply_whitelist_rules(cfg.get("whitelist_rules", []))
-    apply_block_rules(cfg["chain_name"], bad_ips, cfg.get("whitelist_rules", []))
+    setup_block_chain(cfg["chain_name"])
+    apply_block_rules(
+        cfg["chain_name"],
+        bad_ips,
+        cfg.get("whitelist_rules", []),
+        cfg.get("log_blocked_ips", False),
+    )
     apply_allow_ports(cfg["ssh_port"], get_allowed_ports(cfg))
     if cfg.get("allow_icmp", True):
         apply_allow_icmp()
