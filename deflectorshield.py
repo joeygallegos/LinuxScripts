@@ -111,7 +111,7 @@ def fetch_bad_ips(urls):
     for iplist in results:
         if iplist:
             all_ips.update(iplist)
-    print(f"[*] Total unique entries fetched: {len(all_ips)}")
+    print(f"[*] Total unique raw entries fetched: {len(all_ips)}")
     return sorted(all_ips)
 
 
@@ -134,19 +134,18 @@ def is_host_network(network):
     return network.prefixlen == network.max_prefixlen
 
 
-def apply_block_rules(
-    chain,
-    bad_ips,
-    log_blocked_ips=False,
+def collect_block_networks(
+    entries,
     block_cidrs=DEFAULT_BLOCK_CIDRS,
     minimum_score=DEFAULT_MINIMUM_SCORE,
 ):
-    print(f"[*] Preparing source-only block rules for {len(bad_ips)} IPs/subnets...")
-    parsed = []
+    print(f"[*] Normalizing and deduplicating {len(entries)} fetched entries...")
+    networks = set()
     skipped = 0
     skipped_cidrs = 0
     skipped_score = 0
-    for entry in bad_ips:
+    duplicates = 0
+    for entry in entries:
         address, score = parse_feed_entry(entry)
         if score is not None and score < minimum_score:
             print(f"[SKIP] Low score {score}: {address}")
@@ -161,13 +160,30 @@ def apply_block_rules(
             print(f"[SKIP] CIDR disabled: {entry}")
             skipped_cidrs += 1
             continue
-        parsed.append(network)
+        if network in networks:
+            duplicates += 1
+            continue
+        networks.add(network)
+
+    print(
+        f"[*] Prepared {len(networks)} distinct IPs/subnets "
+        f"({duplicates} duplicates removed)."
+    )
+    print(
+        f"[*] Skipped {skipped} invalid entries, {skipped_cidrs} CIDR entries, "
+        f"and {skipped_score} low-score entries."
+    )
+    return sorted(networks, key=lambda n: (n.version, int(n.network_address), n.prefixlen))
+
+
+def apply_block_rules(chain, networks, log_blocked_ips=False):
+    print(f"[*] Creating source-only block rules for {len(networks)} distinct IPs/subnets...")
 
     for firewall, label in FIREWALLS:
         version = 4 if firewall == "iptables" else 6
         rules = ["*filter"]
         applied = 0
-        for network in parsed:
+        for network in networks:
             if network.version != version:
                 continue
             if log_blocked_ips:
@@ -182,30 +198,26 @@ def apply_block_rules(
                 ["sudo", f"{firewall}-restore", "-n"],
                 "\n".join(rules) + "\n",
             )
-    print(
-        f"[*] Skipped {skipped} invalid entries, {skipped_cidrs} CIDR entries, "
-        f"and {skipped_score} low-score entries."
-    )
 
 
 def main():
     cfg = load_config()
     chain = cfg.get("chain_name", "BADIPS")
-    reset_managed_rules(chain)
 
     if FLUSH_ONLY:
+        reset_managed_rules(chain)
         print("[+] DeflectorShield rules flushed. Host firewall policies are ACCEPT.")
         return
 
-    setup_block_chain(chain)
     bad_ips = fetch_bad_ips(cfg.get("blocklist_feeds", []))
-    apply_block_rules(
-        chain,
+    networks = collect_block_networks(
         bad_ips,
-        cfg.get("log_blocked_ips", False),
         cfg.get("block_cidrs", DEFAULT_BLOCK_CIDRS),
         cfg.get("minimum_score", DEFAULT_MINIMUM_SCORE),
     )
+    reset_managed_rules(chain)
+    setup_block_chain(chain)
+    apply_block_rules(chain, networks, cfg.get("log_blocked_ips", False))
     print("[+] DeflectorShield block rules applied successfully.")
 
 
