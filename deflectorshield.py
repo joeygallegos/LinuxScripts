@@ -1,9 +1,21 @@
-import subprocess, requests, time, threading, ipaddress, json, socket, sys, os
+import ipaddress
+import json
+import subprocess
+import sys
+import threading
+import time
+
+import requests
 
 CONFIG_FILE = "deflectorshield_config.json"
 DRY_RUN = "--dry-run" in sys.argv
 FLUSH_ONLY = "--flush" in sys.argv
-DEFAULT_WEB_PORTS = [80, 443]
+FIREWALLS = [
+    ("iptables", "IPv4"),
+    ("ip6tables", "IPv6"),
+]
+DEFAULT_BLOCK_CIDRS = False
+DEFAULT_MINIMUM_SCORE = 3
 
 
 def run(cmd):
@@ -20,6 +32,8 @@ def run_with_input(cmd, input_text):
     if DRY_RUN:
         line_count = len(input_text.splitlines())
         print(f"[DRY-RUN] {' '.join(cmd)} < {line_count} generated lines")
+        if line_count <= 50:
+            print(input_text, end="")
     else:
         print(f"[CMD] {' '.join(cmd)} < generated rules")
         subprocess.run(cmd, input=input_text, text=True, check=False)
@@ -30,112 +44,53 @@ def load_config():
         return json.load(f)
 
 
-def reset_iptables():
-    """Flush and reset iptables."""
-    print("[*] Flushing iptables and setting default policies to ACCEPT...")
-    run(["sudo", "iptables", "-F"])
-    run(["sudo", "iptables", "-X"])
-    run(["sudo", "iptables", "-t", "nat", "-F"])
-    run(["sudo", "iptables", "-P", "INPUT", "ACCEPT"])
-    run(["sudo", "iptables", "-P", "FORWARD", "ACCEPT"])
-    run(["sudo", "iptables", "-P", "OUTPUT", "ACCEPT"])
+def reset_managed_rules(chain):
+    """Remove only DeflectorShield's chain and keep default policies open."""
+    print("[*] Resetting DeflectorShield rules and setting default policies to ACCEPT...")
+    for firewall, _ in FIREWALLS:
+        run(["sudo", firewall, "-P", "INPUT", "ACCEPT"])
+        run(["sudo", firewall, "-P", "FORWARD", "ACCEPT"])
+        run(["sudo", firewall, "-P", "OUTPUT", "ACCEPT"])
+        for _ in range(10):
+            run(["sudo", firewall, "-D", "INPUT", "-j", chain])
+        run(["sudo", firewall, "-F", chain])
+        run(["sudo", firewall, "-X", chain])
 
 
-def allow_fetch_dependencies():
-    """Allow outbound DNS, HTTP(S), loopback for fetching lists."""
-    run(
-        [
-            "sudo",
-            "iptables",
-            "-A",
-            "OUTPUT",
-            "-p",
-            "udp",
-            "--dport",
-            "53",
-            "-j",
-            "ACCEPT",
-        ]
-    )
-    run(
-        [
-            "sudo",
-            "iptables",
-            "-A",
-            "OUTPUT",
-            "-p",
-            "tcp",
-            "--dport",
-            "53",
-            "-j",
-            "ACCEPT",
-        ]
-    )
-    run(
-        [
-            "sudo",
-            "iptables",
-            "-A",
-            "OUTPUT",
-            "-p",
-            "tcp",
-            "--dport",
-            "80",
-            "-j",
-            "ACCEPT",
-        ]
-    )
-    run(
-        [
-            "sudo",
-            "iptables",
-            "-A",
-            "OUTPUT",
-            "-p",
-            "tcp",
-            "--dport",
-            "443",
-            "-j",
-            "ACCEPT",
-        ]
-    )
-    run(["sudo", "iptables", "-A", "INPUT", "-i", "lo", "-j", "ACCEPT"])
-    run(["sudo", "iptables", "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT"])
-    run(
-        [
-            "sudo",
-            "iptables",
-            "-A",
-            "INPUT",
-            "-m",
-            "state",
-            "--state",
-            "ESTABLISHED,RELATED",
-            "-j",
-            "ACCEPT",
-        ]
-    )
+def parse_feed_lines(text):
+    return [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
+def parse_feed_entry(entry):
+    parts = entry.split()
+    if not parts:
+        return None, None
+    score = None
+    if len(parts) > 1:
+        try:
+            score = int(parts[1])
+        except ValueError:
+            score = None
+    return parts[0], score
 
 
 def fetch_url(url, results, idx):
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {"User-Agent": "DeflectorShield/1.0"}
     for attempt in range(3):
         try:
-            print(f"[*] Fetching {url} (attempt {attempt+1})...")
+            print(f"[*] Fetching {url} (attempt {attempt + 1})...")
             resp = requests.get(url, headers=headers, timeout=10)
             if resp.status_code == 200:
-                lines = [
-                    line.strip()
-                    for line in resp.text.splitlines()
-                    if line.strip() and not line.startswith("#")
-                ]
-                results[idx] = lines
-                print(f"[+] Fetched {len(lines)} entries from {url}")
+                results[idx] = parse_feed_lines(resp.text)
+                print(f"[+] Fetched {len(results[idx])} entries from {url}")
                 return
-            else:
-                print(f"[WARN] Status {resp.status_code} from {url}")
+            print(f"[WARN] Status {resp.status_code} from {url}")
         except Exception as e:
-            print(f"[ERROR] Attempt {attempt+1} failed for {url}: {e}")
+            print(f"[ERROR] Attempt {attempt + 1} failed for {url}: {e}")
             time.sleep(1)
     results[idx] = []
     print(f"[ERROR] Failed to fetch from {url} after 3 attempts.")
@@ -146,8 +101,8 @@ def fetch_bad_ips(urls):
     print("[*] Fetching blocklists concurrently...")
     results = [None] * len(urls)
     threads = []
-    for i, u in enumerate(urls):
-        t = threading.Thread(target=fetch_url, args=(u, results, i))
+    for i, url in enumerate(urls):
+        t = threading.Thread(target=fetch_url, args=(url, results, i))
         t.start()
         threads.append(t)
     for t in threads:
@@ -160,204 +115,98 @@ def fetch_bad_ips(urls):
     return sorted(all_ips)
 
 
-def is_valid_network(value):
+def normalize_network(value):
     try:
-        ipaddress.ip_network(value, strict=False)
-        return True
+        return ipaddress.ip_network(value, strict=False)
     except ValueError:
-        return False
-
-
-def resolve_hostname(addr):
-    try:
-        return socket.gethostbyname(addr)
-    except socket.gaierror:
-        print(f"[WARN] Could not resolve hostname {addr}, skipping.")
         return None
 
 
 def setup_block_chain(chain):
-    run(["sudo", "iptables", "-D", "INPUT", "-j", chain])
-    run(["sudo", "iptables", "-F", chain])
-    run(["sudo", "iptables", "-X", chain])
-    run(["sudo", "iptables", "-N", chain])
-    run(["sudo", "iptables", "-A", "INPUT", "-j", chain])
+    for firewall, label in FIREWALLS:
+        print(f"[*] Creating {label} block chain {chain}...")
+        run(["sudo", firewall, "-N", chain])
+        run(["sudo", firewall, "-D", "INPUT", "-j", chain])
+        run(["sudo", firewall, "-I", "INPUT", "-j", chain])
 
 
-def apply_block_rules(chain, bad_ips, whitelist, log_blocked_ips=False):
-    whitelist_addresses = {w["address"] for w in whitelist}
-    print(f"[*] Preparing block rules for {len(bad_ips)} IPs/subnets...")
-    rules = ["*filter"]
+def is_host_network(network):
+    return network.prefixlen == network.max_prefixlen
+
+
+def apply_block_rules(
+    chain,
+    bad_ips,
+    log_blocked_ips=False,
+    block_cidrs=DEFAULT_BLOCK_CIDRS,
+    minimum_score=DEFAULT_MINIMUM_SCORE,
+):
+    print(f"[*] Preparing source-only block rules for {len(bad_ips)} IPs/subnets...")
+    parsed = []
     skipped = 0
-    for ip in bad_ips:
-        if not is_valid_network(ip):
-            print(f"[SKIP] Invalid: {ip}")
+    skipped_cidrs = 0
+    skipped_score = 0
+    for entry in bad_ips:
+        address, score = parse_feed_entry(entry)
+        if score is not None and score < minimum_score:
+            print(f"[SKIP] Low score {score}: {address}")
+            skipped_score += 1
+            continue
+        network = normalize_network(address)
+        if not network:
+            print(f"[SKIP] Invalid: {entry}")
             skipped += 1
             continue
-        # skip if explicitly whitelisted (by address only)
-        if ip in whitelist_addresses:
-            print(f"[SKIP] Whitelisted: {ip}")
-            skipped += 1
+        if not block_cidrs and not is_host_network(network):
+            print(f"[SKIP] CIDR disabled: {entry}")
+            skipped_cidrs += 1
             continue
-        if log_blocked_ips:
-            rules.append(f'-A {chain} -s {ip} -j LOG --log-prefix "[IPBLOCK] "')
-        rules.append(f"-A {chain} -s {ip} -j DROP")
-    rules.append("COMMIT")
-    print(f"[*] Loading {len(rules) - 2} block rules in one batch ({skipped} skipped)...")
-    run_with_input(["sudo", "iptables-restore", "-n"], "\n".join(rules) + "\n")
+        parsed.append(network)
 
-
-def apply_whitelist_rules(whitelist):
-    print(f"[*] Adding {len(whitelist)} whitelist ACCEPT rules...")
-    for w in whitelist:
-        addr = w["address"]
-        port = w.get("port")
-        if not is_valid_network(addr):
-            resolved = resolve_hostname(addr)
-            if not resolved:
+    for firewall, label in FIREWALLS:
+        version = 4 if firewall == "iptables" else 6
+        rules = ["*filter"]
+        applied = 0
+        for network in parsed:
+            if network.version != version:
                 continue
-            addr = resolved
-        if port and str(port).isdigit():
-            run(
-                [
-                    "sudo",
-                    "iptables",
-                    "-A",
-                    "INPUT",
-                    "-s",
-                    addr,
-                    "-p",
-                    "tcp",
-                    "--dport",
-                    str(port),
-                    "-j",
-                    "ACCEPT",
-                ]
+            if log_blocked_ips:
+                rules.append(f'-A {chain} -s {network} -j LOG --log-prefix "[IPBLOCK] "')
+                applied += 1
+            rules.append(f"-A {chain} -s {network} -j DROP")
+            applied += 1
+        rules.append("COMMIT")
+        print(f"[*] Loading {applied} {label} block rules in one batch...")
+        if applied:
+            run_with_input(
+                ["sudo", f"{firewall}-restore", "-n"],
+                "\n".join(rules) + "\n",
             )
-        else:
-            run(["sudo", "iptables", "-A", "INPUT", "-s", addr, "-j", "ACCEPT"])
-
-
-def apply_allow_ports(ssh_port, ports):
-    run(
-        [
-            "sudo",
-            "iptables",
-            "-A",
-            "INPUT",
-            "-p",
-            "tcp",
-            "--dport",
-            str(ssh_port),
-            "-j",
-            "ACCEPT",
-        ]
+    print(
+        f"[*] Skipped {skipped} invalid entries, {skipped_cidrs} CIDR entries, "
+        f"and {skipped_score} low-score entries."
     )
-    for p in ports:
-        run(
-            [
-                "sudo",
-                "iptables",
-                "-A",
-                "INPUT",
-                "-p",
-                "tcp",
-                "--dport",
-                str(p),
-                "-j",
-                "ACCEPT",
-            ]
-        )
-
-
-def get_allowed_ports(cfg):
-    ports = []
-    for p in cfg.get("web_ports", DEFAULT_WEB_PORTS) + cfg.get("allow_ports", []):
-        if p not in ports:
-            ports.append(p)
-    return ports
-
-
-def apply_allow_icmp():
-    run(
-        [
-            "sudo",
-            "iptables",
-            "-I",
-            "INPUT",
-            "-p",
-            "icmp",
-            "--icmp-type",
-            "echo-request",
-            "-j",
-            "ACCEPT",
-        ]
-    )
-
-
-def apply_nat_redirects(redirects):
-    print(f"[*] Adding {len(redirects)} NAT redirect rules...")
-    for redirect in redirects:
-        dest_ip = redirect["destination_ip"]
-        to_ip = redirect["to_ip"]
-        port = str(redirect["port"])
-        to_port = str(redirect.get("to_port", port))
-        if not is_valid_network(dest_ip) or "/" in dest_ip:
-            print(f"[SKIP] Invalid NAT destination IP: {dest_ip}")
-            continue
-        if not is_valid_network(to_ip) or "/" in to_ip:
-            print(f"[SKIP] Invalid NAT target IP: {to_ip}")
-            continue
-        run(
-            [
-                "sudo",
-                "iptables",
-                "-t",
-                "nat",
-                "-A",
-                "OUTPUT",
-                "-p",
-                "tcp",
-                "-d",
-                dest_ip,
-                "--dport",
-                port,
-                "-j",
-                "DNAT",
-                "--to-destination",
-                f"{to_ip}:{to_port}",
-            ]
-        )
-
-
-def set_default_drop():
-    run(["sudo", "iptables", "-P", "INPUT", "DROP"])
 
 
 def main():
     cfg = load_config()
+    chain = cfg.get("chain_name", "BADIPS")
+    reset_managed_rules(chain)
+
     if FLUSH_ONLY:
-        print("[*] Flushing rules only and exiting...")
-        reset_iptables()
+        print("[+] DeflectorShield rules flushed. Host firewall policies are ACCEPT.")
         return
 
-    reset_iptables()
-    allow_fetch_dependencies()
-    bad_ips = fetch_bad_ips(cfg["blocklist_feeds"])
-    apply_whitelist_rules(cfg.get("whitelist_rules", []))
-    setup_block_chain(cfg["chain_name"])
+    setup_block_chain(chain)
+    bad_ips = fetch_bad_ips(cfg.get("blocklist_feeds", []))
     apply_block_rules(
-        cfg["chain_name"],
+        chain,
         bad_ips,
-        cfg.get("whitelist_rules", []),
         cfg.get("log_blocked_ips", False),
+        cfg.get("block_cidrs", DEFAULT_BLOCK_CIDRS),
+        cfg.get("minimum_score", DEFAULT_MINIMUM_SCORE),
     )
-    apply_allow_ports(cfg["ssh_port"], get_allowed_ports(cfg))
-    if cfg.get("allow_icmp", True):
-        apply_allow_icmp()
-    apply_nat_redirects(cfg.get("nat_redirects", []))
-    set_default_drop()
-    print("[+] DeflectorShield applied successfully.")
+    print("[+] DeflectorShield block rules applied successfully.")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,14 @@
+{
+  "chain_name": "BADIPS",
+  "log_blocked_ips": false,
+  "block_cidrs": false,
+  "minimum_score": 1,
+  "blocklist_feeds": [
+    "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt",
+    "https://rules.emergingthreats.net/blockrules/compromised-ips.txt",
+    "https://cinsscore.com/list/ci-badguys.txt",
+    "https://www.blocklist.de/downloads/export-ssh.txt",
+    "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset",
+    "https://lists.blocklist.de/lists/all.txt"
+  ]
+}
